@@ -1,12 +1,22 @@
 #!/bin/bash
-# App Platform controller: fetches the run scripts (branch bench-scripts of the fork; the SSH key comes only from the SSHKEY secret), starts the driver
-# on load generator 1 over SSH (once), then mirrors its results page here every 20 s. Restart-safe.
+# App Platform controller. It makes its own SSH key pair (the private key never leaves this
+# container) and shows the public key at /pubkey.txt, so the droplets can be created with it.
+# Then it polls branch bench-scripts of the fork until hosts.env names the droplets, starts the
+# driver on load generator 1 over SSH (once), and mirrors its results page here every 20 s.
 mkdir -p /www; echo "controller starting $(date -u)" > /www/index.txt
 (cd /www && nohup python3 -m http.server 8080 >/dev/null 2>&1 &)
-apt-get update -q >/dev/null 2>&1; apt-get install -yq openssh-client xz-utils openssl git >/dev/null 2>&1
-echo "$(date -u +%T) tools installed" >> /www/index.txt
-git clone -q --depth 1 -b bench-scripts https://github.com/xoai/twelve-dollar-server-challenge /run-src || echo "clone failed" >> /www/index.txt
-mkdir -p /root/.ssh && echo "$SSHKEY" | base64 -d > /root/.ssh/id && chmod 600 /root/.ssh/id && ssh-keygen -y -f /root/.ssh/id >/dev/null || echo "$(date -u +%T) SSH key from the SSHKEY secret is invalid" >> /www/index.txt
+apt-get update -q >/dev/null 2>&1; apt-get install -yq openssh-client xz-utils git >/dev/null 2>&1
+mkdir -p /root/.ssh && [ -f /root/.ssh/id ] || ssh-keygen -q -t ed25519 -N '' -C bench-ctl -f /root/.ssh/id
+cp /root/.ssh/id.pub /www/pubkey.txt
+echo "$(date -u +%T) key ready: $(cat /root/.ssh/id.pub)" >> /www/index.txt
+R=https://github.com/xoai/twelve-dollar-server-challenge
+while :; do
+  rm -rf /run-src; git clone -q --depth 1 -b bench-scripts $R /run-src 2>/dev/null
+  . /run-src/hosts.env 2>/dev/null
+  [ -n "$LG1" ] && break
+  echo "$(date -u +%T) waiting for hosts.env" >> /www/index.txt; sleep 20
+done
+echo "$(date -u +%T) hosts: LG1=$LG1 server=$SRV_PRIV lgs=$LGS_PRIV" >> /www/index.txt
 (cd /run-src && tar -cJf /payload.tar.xz lgk6.c driver.sh srv_setup.sh srvctl.sh lg_setup.sh hosts.env)
 O="-i /root/.ssh/id -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o ConnectTimeout=15"
 until ssh $O root@$LG1 true; do echo "$(date -u +%T) waiting for ssh to $LG1" >> /www/index.txt; sleep 10; done
