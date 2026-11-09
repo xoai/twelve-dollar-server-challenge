@@ -19,7 +19,11 @@ done
 echo "$(date -u +%T) hosts: LG1=$LG1 server=$SRV_PRIV lgs=$LGS_PRIV" >> /www/index.txt
 (cd /run-src && tar -cJf /payload.tar.xz lgk6.c driver.sh srv_setup.sh srvctl.sh lg_setup.sh hosts.env)
 O="-i /root/.ssh/id -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o ConnectTimeout=15"
-until ssh $O root@$LG1 true; do echo "$(date -u +%T) waiting for ssh to $LG1" >> /www/index.txt; sleep 10; done
+for ip in $LG1 $SRV_PRIV; do
+  if timeout 5 bash -c "</dev/tcp/$ip/22" 2>/dev/null; then echo "$(date -u +%T) network: tcp $ip:22 OPEN" >> /www/index.txt
+  else echo "$(date -u +%T) network: tcp $ip:22 BLOCKED" >> /www/index.txt; fi
+done
+until ssh $O root@$LG1 true 2>/tmp/ssherr; do echo "$(date -u +%T) waiting for ssh to $LG1: $(tail -1 /tmp/ssherr)" >> /www/index.txt; sleep 10; done
 if ! ssh $O root@$LG1 test -f /opt/bench/started; then
   ssh $O root@$LG1 "mkdir -p /opt/bench" && scp -q $O /payload.tar.xz /root/.ssh/id root@$LG1:/opt/bench/ \
    && ssh $O root@$LG1 "cd /opt/bench && tar xJf payload.tar.xz && chmod 600 id && touch started && (nohup bash driver.sh > driver.out 2>&1 &)"
